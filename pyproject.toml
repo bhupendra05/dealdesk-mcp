@@ -25,6 +25,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# India market tools — adds live comps, DCF, and DRHP analysis tools
+india = [
+    "india-comps @ git+https://github.com/bhupendra05/india-comps.git",
+    "india-dcf @ git+https://github.com/bhupendra05/india-dcf.git",
+    "drhp-intel @ git+https://github.com/bhupendra05/drhp-intel.git",
+]
 dev = ["pytest>=7.0"]
 
 [project.scripts]

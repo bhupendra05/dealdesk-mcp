@@ -20,11 +20,17 @@ DealDesk is an [MCP](https://modelcontextprotocol.io) server that exposes the
 | `dealdesk_continuation_vehicle` | Model a GP-led continuation vehicle (carry, roll vs cash-out) |
 | `dealdesk_simulate_exit` | Cap-table exit waterfall with liquidation preferences |
 | `dealdesk_generate_teaser` | Generate an investor teaser or anonymized blind teaser |
+| `dealdesk_india_comps` 🇮🇳 | Live NSE/BSE comparable-company analysis (EV/EBITDA, P/E, P/B) |
+| `dealdesk_india_dcf` 🇮🇳 | India-calibrated DCF (G-Sec, India ERP, 25.168% tax) |
+| `dealdesk_drhp_analyze` 🇮🇳 | DRHP (IPO prospectus) red-flag scan from a PDF |
 
 ## Install
 
 ```bash
 pip install git+https://github.com/bhupendra05/dealdesk-mcp.git
+
+# with the India market tools (live comps, DCF, DRHP)
+pip install "dealdesk-mcp[india] @ git+https://github.com/bhupendra05/dealdesk-mcp.git"
 ```
 
 ## Connect to Claude Desktop
@@ -55,6 +61,9 @@ Once connected, ask your LLM:
 - *"Two founders own 6M and 4M shares. A Seed investor put in ₹2 Cr at ₹8 Cr pre with a 1x liq pref. If we exit at ₹4 Cr, who gets what?"*
 - *"Generate a blind teaser for a robotics company doing ₹120 Cr revenue, 20% EBITDA margin, raising ₹150 Cr."*
 - *"Price a secondary: NAV ₹50 Cr, bid at 88% of NAV."*
+- *"Pull comps for INFY, TCS and WIPRO."* 🇮🇳
+- *"Run an India DCF on INFY in IT Services."* 🇮🇳
+- *"Scan this DRHP PDF for red flags."* 🇮🇳
 
 ## Architecture
 

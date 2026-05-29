@@ -25,6 +25,31 @@ from carryflow.secondary import price_secondary, model_continuation_vehicle
 from exitsim import CapTable, FundingRound, simulate_exit
 from teasergen import CompanyInfo, FinancialYear, generate_teaser, render_markdown
 
+# India market tools (optional — degrade gracefully if not installed)
+try:
+    from india_comps.fetch import fetch_company as _fetch_comps_company
+    from india_comps import build_comps as _build_comps
+    from india_comps.comps import implied_value as _implied_value, DEFAULT_METRICS as _COMPS_METRICS
+    _HAS_COMPS = True
+except Exception:
+    _HAS_COMPS = False
+
+try:
+    from india_dcf.fetch import fetch_india_financials as _fetch_dcf
+    from india_dcf import (run_india_dcf as _run_dcf, calculate_wacc as _calc_wacc,
+                           IndiaWACCParams as _WACCParams, IndiaDCFAssumptions as _DCFAssump,
+                           SECTOR_BETA as _SECTOR_BETA)
+    _HAS_DCF = True
+except Exception:
+    _HAS_DCF = False
+
+try:
+    from drhp_intel import analyze as _drhp_analyze
+    from drhp_intel.parser import read_pdf as _read_pdf
+    _HAS_DRHP = True
+except Exception:
+    _HAS_DRHP = False
+
 mcp = FastMCP("dealdesk_mcp")
 
 
@@ -372,6 +397,153 @@ async def dealdesk_generate_teaser(params: TeaserInput) -> str:
         )
         teaser = generate_teaser(company, anonymize=params.anonymize)
         return render_markdown(teaser)
+    except Exception as e:
+        return _err(e)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Tool 7 — India Comparable Company Analysis (live NSE/BSE)
+# ════════════════════════════════════════════════════════════════════════════
+
+class CompsInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    tickers: List[str] = Field(..., description="NSE/BSE tickers, e.g. ['INFY','TCS','WIPRO']", min_length=1, max_length=15)
+
+
+@mcp.tool(
+    name="dealdesk_india_comps",
+    annotations={"title": "India Comparable Company Analysis", "readOnlyHint": True,
+                 "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+)
+async def dealdesk_india_comps(params: CompsInput) -> str:
+    """Build a comparable-company table for NSE/BSE tickers (live market data).
+
+    Fetches EV/EBITDA, P/E, P/B, EV/Revenue multiples for each ticker and returns
+    median/mean/high/low across the peer set. Requires network access.
+
+    Args:
+        params (CompsInput): list of NSE/BSE tickers.
+
+    Returns:
+        str: JSON with per-company multiples and summary statistics, or an Error.
+    """
+    if not _HAS_COMPS:
+        return "Error: india-comps not installed. pip install git+https://github.com/bhupendra05/india-comps.git"
+    try:
+        multiples = []
+        failed = []
+        for t in params.tickers:
+            try:
+                _info, _fin, mult = _fetch_comps_company(t)
+                multiples.append(mult)
+            except Exception:
+                failed.append(t)
+        if not multiples:
+            return f"Error: could not fetch any of: {', '.join(params.tickers)}"
+        table = _build_comps(multiples)
+        key_metrics = ["ev_ebitda", "pe_ratio", "pb_ratio", "ev_revenue"]
+        out = {
+            "companies": [{"symbol": m.symbol, "ev_ebitda": m.ev_ebitda,
+                           "pe_ratio": m.pe_ratio, "pb_ratio": m.pb_ratio,
+                           "ev_revenue": m.ev_revenue} for m in multiples],
+            "summary": {metric: {"median": table.median(metric), "mean": table.mean(metric),
+                                 "high": table.high(metric), "low": table.low(metric)}
+                        for metric in key_metrics},
+            "failed": failed,
+        }
+        return json.dumps(out, indent=2, default=str)
+    except Exception as e:
+        return _err(e)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Tool 8 — India DCF Valuation (live data, India-calibrated)
+# ════════════════════════════════════════════════════════════════════════════
+
+class IndiaDCFInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    ticker: str = Field(..., description="NSE/BSE ticker, e.g. 'INFY'", min_length=1)
+    sector: str = Field("Default", description="Sector for beta/WC norms, e.g. 'IT Services', 'Banking', 'FMCG'")
+    years: int = Field(5, description="Projection years", ge=3, le=10)
+    terminal_growth: float = Field(0.055, description="Terminal growth (India default 5.5%)", ge=0, lt=0.10)
+
+
+@mcp.tool(
+    name="dealdesk_india_dcf",
+    annotations={"title": "India-Calibrated DCF Valuation", "readOnlyHint": True,
+                 "destructiveHint": False, "idempotentHint": False, "openWorldHint": True},
+)
+async def dealdesk_india_dcf(params: IndiaDCFInput) -> str:
+    """Run an India-calibrated DCF for an NSE/BSE company (live data).
+
+    Uses G-Sec risk-free, India ERP, sector beta, 25.168% effective tax, ₹ Crore.
+    Requires network access to fetch financials.
+
+    Args:
+        params (IndiaDCFInput): ticker, sector, projection years, terminal growth.
+
+    Returns:
+        str: JSON with WACC, implied prices (Gordon/exit/blended), enterprise value.
+    """
+    if not _HAS_DCF:
+        return "Error: india-dcf not installed. pip install git+https://github.com/bhupendra05/india-dcf.git"
+    try:
+        company = _fetch_dcf(params.ticker, sector=params.sector)
+        wacc = _calc_wacc(company, _WACCParams(beta=_SECTOR_BETA.get(params.sector, 1.0)))
+        result = _run_dcf(company, _DCFAssump(projection_years=params.years,
+                                              terminal_growth_rate=params.terminal_growth), wacc)
+        return json.dumps({
+            "company": result.company_name, "symbol": result.symbol,
+            "wacc": round(result.wacc, 4), "tax_rate": round(result.tax_rate, 4),
+            "enterprise_value_cr": round(result.ev_blended_cr, 1),
+            "implied_price_gordon": round(result.implied_price_gordon, 2),
+            "implied_price_exit": round(result.implied_price_exit, 2),
+            "implied_price_blended": round(result.implied_price_blended, 2),
+        }, indent=2)
+    except Exception as e:
+        return _err(e)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Tool 9 — DRHP Red Flag Scan
+# ════════════════════════════════════════════════════════════════════════════
+
+class DRHPInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    pdf_path: str = Field(..., description="Absolute path to a DRHP PDF file", min_length=1)
+
+
+@mcp.tool(
+    name="dealdesk_drhp_analyze",
+    annotations={"title": "DRHP Red Flag Scan", "readOnlyHint": True,
+                 "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+)
+async def dealdesk_drhp_analyze(params: DRHPInput) -> str:
+    """Analyze a DRHP (IPO prospectus) PDF and surface a red-flag summary.
+
+    Extracts company name, financials, objects of issue, RPTs, risk factors, and
+    computes a red-flag score from the PDF.
+
+    Args:
+        params (DRHPInput): absolute path to a DRHP PDF.
+
+    Returns:
+        str: JSON summary with company, financials, red-flag score, or an Error.
+    """
+    if not _HAS_DRHP:
+        return "Error: drhp-intel not installed. pip install git+https://github.com/bhupendra05/drhp-intel.git"
+    try:
+        text, pages = _read_pdf(params.pdf_path)
+        summary = _drhp_analyze(text, pages)
+        return json.dumps({
+            "company_name": summary.company_name,
+            "page_count": pages,
+            "num_risk_factors": len(summary.risk_factors),
+            "revenue_cagr": summary.revenue_cagr(),
+            "red_flag_score": summary.red_flags.total if summary.red_flags else None,
+        }, indent=2, default=str)
+    except FileNotFoundError:
+        return f"Error: file not found: {params.pdf_path}"
     except Exception as e:
         return _err(e)
 

@@ -189,3 +189,65 @@ def test_waterfall_handles_bad_input_gracefully():
         response_format=ResponseFormat.JSON)))
     data = json.loads(out)
     assert data["gp_carry"] == 0.0  # proceeds == capital, no profit
+
+
+# ── India tools registration + wiring (network mocked) ───────────────────────
+
+def test_india_tools_registered():
+    tools = run(mcp.list_tools())
+    names = {t.name for t in tools}
+    assert {"dealdesk_india_comps", "dealdesk_india_dcf",
+            "dealdesk_drhp_analyze"}.issubset(names)
+
+def test_india_comps_wiring(monkeypatch):
+    """Mock fetch_company so we test wiring without network."""
+    import dealdesk_mcp.server as srv
+    from india_comps.fetch import IndiaMultiples, IndiaCompanyInfo, IndiaFinancials
+
+    def fake_fetch(ticker):
+        m = IndiaMultiples(symbol=ticker, name=ticker, market_cap_cr=1000,
+                           enterprise_value_cr=1100, pe_ratio=20.0, pb_ratio=4.0,
+                           ev_ebitda=15.0, ev_revenue=3.0)
+        return (IndiaCompanyInfo(symbol=ticker, name=ticker), IndiaFinancials(symbol=ticker), m)
+
+    monkeypatch.setattr(srv, "_fetch_comps_company", fake_fetch)
+    from dealdesk_mcp.server import dealdesk_india_comps, CompsInput
+    out = run(dealdesk_india_comps(CompsInput(tickers=["INFY", "TCS"])))
+    data = json.loads(out)
+    assert len(data["companies"]) == 2
+    assert data["summary"]["ev_ebitda"]["median"] == pytest.approx(15.0)
+
+def test_india_comps_all_fail(monkeypatch):
+    import dealdesk_mcp.server as srv
+    def boom(ticker):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(srv, "_fetch_comps_company", boom)
+    from dealdesk_mcp.server import dealdesk_india_comps, CompsInput
+    out = run(dealdesk_india_comps(CompsInput(tickers=["XXX"])))
+    assert "Error" in out
+
+def test_india_dcf_wiring(monkeypatch):
+    import dealdesk_mcp.server as srv
+    from india_dcf.financials import IndiaCompanyData, IndiaAnnualData
+
+    def fake_fetch(symbol, sector="Default"):
+        hist = [IndiaAnnualData(fiscal_year=f"FY{2022+i}", revenue_cr=1000*(1.1**i),
+                                ebitda_cr=200*(1.1**i), ebit_cr=160*(1.1**i),
+                                pat_cr=120*(1.1**i), depreciation_cr=40*(1.1**i),
+                                capex_cr=50*(1.1**i), interest_expense_cr=10,
+                                tax_cr=40*(1.1**i), net_debt_cr=100,
+                                shares_outstanding_cr=100) for i in range(3)]
+        return IndiaCompanyData(symbol=symbol, company_name=symbol, sector=sector, history=hist)
+
+    monkeypatch.setattr(srv, "_fetch_dcf", fake_fetch)
+    from dealdesk_mcp.server import dealdesk_india_dcf, IndiaDCFInput
+    out = run(dealdesk_india_dcf(IndiaDCFInput(ticker="INFY", sector="IT Services")))
+    data = json.loads(out)
+    assert data["symbol"] == "INFY"
+    assert data["implied_price_blended"] > 0
+    assert 0.08 < data["wacc"] < 0.18
+
+def test_drhp_file_not_found():
+    from dealdesk_mcp.server import dealdesk_drhp_analyze, DRHPInput
+    out = run(dealdesk_drhp_analyze(DRHPInput(pdf_path="/nonexistent/file.pdf")))
+    assert "not found" in out.lower() or "Error" in out
