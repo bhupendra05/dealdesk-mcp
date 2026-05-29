@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dealdesk-mcp"
+version = "1.0.0"
+description = "MCP server exposing PE/VC deal tools (waterfall, exit, secondary, CV, teaser) to Claude/ChatGPT"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Bhupendra Gurjar", email = "bgurjar05.bg@gmail.com" }]
+keywords = ["mcp", "model-context-protocol", "private-equity", "venture-capital",
+            "waterfall", "carried-interest", "claude", "investment-banking"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "mcp>=1.2",
+    "carryflow @ git+https://github.com/bhupendra05/carryflow.git",
+    "exitsim @ git+https://github.com/bhupendra05/exitsim.git",
+    "teasergen @ git+https://github.com/bhupendra05/teasergen.git",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+dealdesk-mcp = "dealdesk_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/bhupendra05/dealdesk-mcp"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
